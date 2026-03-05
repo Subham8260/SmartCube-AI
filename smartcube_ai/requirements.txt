@@ -1,1 +1,16 @@
+# SmartCube AI — Dependencies
+# Install: pip install -r requirements.txt
+
 fastapi
+uvicorn[standard]
+pydantic
+streamlit
+requests
+opencv-python
+numpy
+scikit-learn
+kociemba
+matplotlib
+
+# Optional — only needed if training/using CNN model:
+# tensorflow
