@@ -55,6 +55,7 @@ class ScanAllRequest(BaseModel):
 class ScanFrameRequest(BaseModel):
     image: str                  # single base64 frame (live camera)
     draw_overlay: bool = True   # return annotated preview image
+    face_index: Optional[int] = None  # 0=U,1=R,2=F,3=D,4=L,5=B — locks center color
 
 class SolveRequest(BaseModel):
     cube_faces: List[List[str]] # 6 faces × 9 colors
@@ -115,7 +116,7 @@ def scan_all_faces(req: ScanAllRequest):
         try:
             frame  = _decode_image(img_b64)
             tiles  = extract_tiles(frame)
-            colors = predict_colors(tiles)
+            colors = predict_colors(tiles, face_index=idx)   # locks center
             cube_faces.append(_safe_colors(colors))
         except Exception as exc:
             # Don't crash — return placeholder and flag the issue
@@ -136,11 +137,14 @@ def scan_single_frame(req: ScanFrameRequest):
     """
     Scan a single live-camera frame.
     Returns detected colors + (optionally) an annotated preview image.
+    Accepts optional face_index (0-5) to lock center color.
     """
+    face_index = getattr(req, "face_index", None)
+
     try:
         frame  = _decode_image(req.image)
         tiles  = extract_tiles(frame)
-        colors = predict_colors(tiles)
+        colors = predict_colors(tiles, face_index=face_index)
         colors = _safe_colors(colors)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -148,23 +152,50 @@ def scan_single_frame(req: ScanFrameRequest):
     result: dict = {"colors": colors}
 
     if req.draw_overlay:
-        overlay = draw_grid_overlay(cv2.resize(frame, (300, 300)))
-        # Draw detected color label on each cell
-        h, w = overlay.shape[:2]
-        step  = h // 3
+        resized = cv2.resize(frame, (360, 360))
+        overlay = draw_grid_overlay(resized)
+        h, w    = overlay.shape[:2]
+        step    = h // 3
+
+        # BGR color fills for each detected color
         color_map_bgr = {
-            "white":  (255, 255, 255), "yellow": (0, 213, 255),
-            "red":    (0,   0,   200), "orange": (0, 120, 255),
-            "blue":   (200, 70,   0),  "green":  (0, 155,  72),
+            "white":  (240, 240, 235),
+            "yellow": (  0, 210, 255),
+            "red":    (  0,   0, 200),
+            "orange": (  0, 120, 255),
+            "blue":   (200,  70,   0),
+            "green":  (  0, 155,  50),
         }
+
         for row in range(3):
             for col in range(3):
                 idx   = row * 3 + col
-                cx    = col * step + step // 2
-                cy    = row * step + step // 2
+                x1    = col * step + 6
+                y1    = row * step + 6
+                x2    = x1 + step - 12
+                y2    = y1 + step - 12
                 c_bgr = color_map_bgr.get(colors[idx], (128, 128, 128))
-                cv2.circle(overlay, (cx, cy), 14, c_bgr, -1)
-                cv2.circle(overlay, (cx, cy), 14, (0, 0, 0),  1)
+
+                # Filled rounded square
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), c_bgr, -1)
+                # Dark border
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), 2)
+
+                # Sticker number label
+                cx = x1 + (x2 - x1) // 2
+                cy = y1 + (y2 - y1) // 2
+                cv2.putText(overlay, str(idx+1),
+                            (cx - 6, cy + 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (0, 0, 0), 2)
+
+                # Mark center with star
+                if idx == 4:
+                    cv2.putText(overlay, "*",
+                                (cx + 8, cy - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                                (0, 255, 204), 2)
+
         result["preview"] = _encode_image(overlay)
 
     return result
